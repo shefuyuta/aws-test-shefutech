@@ -19,7 +19,12 @@ resource "aws_security_group" "mongo_sg" {
 resource "aws_instance" "mongo" {
   ami           = "ami-0c3fd0f5d33134a76" # old Amazon Linux 2
   instance_type = "t2.micro"
-  subnet_id     = aws_subnet.public.id
+  subnet_id     = aws_subnet.public_a.id
+  associate_public_ip_address = true
+
+  tags = {
+    Name = "mongo-instance"
+  }
 
   vpc_security_group_ids = [aws_security_group.mongo_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
