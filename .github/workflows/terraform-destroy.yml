@@ -28,31 +28,45 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Init
-        run: terraform init
+      # ★ backendを確実に読み込む
+      - name: Terraform Init (Reconfigure)
+        run: terraform init -reconfigure
 
-      # ✔ destroy予定の確認
+      # ★ destroy対象確認（ログ強化）
       - name: Terraform Plan Destroy
-        run: terraform plan -destroy
+        run: |
+          echo "==== DESTROY PLAN ===="
+          terraform plan -destroy -no-color
 
-      # ✔ destroy実行
+      # ★ destroy
       - name: Terraform Destroy
-        run: terraform destroy -auto-approve
+        run: |
+          echo "==== START DESTROY ===="
+          terraform destroy -auto-approve -no-color
 
-      # ✔ state確認（ここ重要）
+      # ★ state確認（厳密化）
       - name: Check Terraform State
         run: |
-          echo "Remaining resources in state:"
-          terraform state list || echo "State is empty"
+          echo "==== STATE CHECK ===="
+          if terraform state list | grep .; then
+            echo "⚠️ Resources still remain in state!"
+            exit 1
+          else
+            echo "✅ State is empty"
+          fi
 
-      # ✔ AWS確認（簡易）
-      - name: Verify AWS Resources
+      # ★ AWS確認（絞り込み）
+      - name: Verify AWS Resources (Filtered)
         run: |
-          echo "Checking EC2 instances..."
-          aws ec2 describe-instances --query 'Reservations[].Instances[].InstanceId'
+          echo "==== AWS CHECK ===="
 
-          echo "Checking EKS clusters..."
-          aws eks list-clusters
+          echo "EC2 instances with tag mongo-instance:"
+          aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=mongo-instance" \
+            --query 'Reservations[].Instances[].InstanceId'
 
-          echo "Checking S3 buckets..."
-          aws s3 ls
+          echo "EKS clusters:"
+          aws eks list-clusters --query 'clusters'
+
+          echo "S3 buckets (prefix wiz-backup):"
+          aws s3 ls | grep wiz-backup || echo "No matching buckets"
