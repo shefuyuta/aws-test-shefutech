@@ -1,0 +1,8 @@
+permissions:
+  id-token: write
+  contents: read
+
+- uses: aws-actions/configure-aws-credentials@v4
+  with:
+    role-to-assume: arn:aws:iam::751948409182:role/github-actions-role
+    aws-region: ap-northeast-1
