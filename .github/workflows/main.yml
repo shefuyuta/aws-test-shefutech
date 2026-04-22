@@ -14,6 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      - name: Debug files
+        run: |
+          pwd
+          ls -R
       - name: Debug Context
         run: |
           echo "repo=${{ github.repository }}"
