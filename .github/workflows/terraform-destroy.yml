@@ -1,7 +1,7 @@
 name: Terraform Destroy
 
 on:
-  workflow_dispatch:  # 手動実行
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -11,6 +11,10 @@ jobs:
   destroy:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: ./IaC
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,18 +22,37 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::751948409182:role/<あなたのロール名>
+          role-to-assume: arn:aws:iam::751948409182:role/github-actions-role
           aws-region: ap-northeast-1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.14.9
 
       - name: Terraform Init
         run: terraform init
-        working-directory: ./IaC
 
+      # ✔ destroy予定の確認
+      - name: Terraform Plan Destroy
+        run: terraform plan -destroy
+
+      # ✔ destroy実行
       - name: Terraform Destroy
         run: terraform destroy -auto-approve
-        working-directory: ./IaC
+
+      # ✔ state確認（ここ重要）
+      - name: Check Terraform State
+        run: |
+          echo "Remaining resources in state:"
+          terraform state list || echo "State is empty"
+
+      # ✔ AWS確認（簡易）
+      - name: Verify AWS Resources
+        run: |
+          echo "Checking EC2 instances..."
+          aws ec2 describe-instances --query 'Reservations[].Instances[].InstanceId'
+
+          echo "Checking EKS clusters..."
+          aws eks list-clusters
+
+          echo "Checking S3 buckets..."
+          aws s3 ls
