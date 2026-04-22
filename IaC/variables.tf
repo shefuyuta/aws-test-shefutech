@@ -1,3 +1,5 @@
-variable "yutam-cluster" {
-  default = "wiz-cluster"
+variable "cluster_name" {
+  description = "EKS cluster name"
+  type        = string
+  default     = "wiz-cluster"
 }
