@@ -1,0 +1,61 @@
+name: App CI/CD
+
+on:
+  push:
+    paths:
+      - 'app/**'
+
+env:
+  AWS_REGION: ap-northeast-1
+  ECR_REPO: wiz-app
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to ECR
+      run: |
+        aws ecr get-login-password --region $AWS_REGION | \
+        docker login --username AWS --password-stdin \
+        $(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com
+
+    - name: Build Image
+      run: docker build -t $ECR_REPO ./app
+
+    - name: Tag Image
+      run: |
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        docker tag $ECR_REPO:latest $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:latest
+
+    # 🔴 コンテナスキャン
+    - name: Scan Image with Trivy
+      uses: aquasecurity/trivy-action@0.20.0
+      with:
+        image-ref: $ECR_REPO:latest
+        severity: HIGH,CRITICAL
+        exit-code: 0  # デモ用（止めない）
+
+    - name: Push Image
+      run: |
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        docker push $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:latest
+
+    - name: Update Kubeconfig
+      run: |
+        aws eks update-kubeconfig --name wiz-cluster --region $AWS_REGION
+
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl set image deployment/webapp app=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:latest || true
+        kubectl apply -f k8s/
