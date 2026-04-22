@@ -1,0 +1,8 @@
+{
+  "name": "wiz-twitter",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongodb": "^5.7.0"
+  }
+}
