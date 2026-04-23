@@ -1,8 +1,10 @@
 name: App CI/CD
 
 on:
-  push:
-    branches: [ "main" ]
+  workflow_run:
+    workflows: ["Terraform Deploy"]   # ← main.yamlのname
+    types:
+      - completed
 
 env:
   AWS_REGION: ap-northeast-1
