@@ -4,5 +4,9 @@ variable "cluster_name" {
   default     = "wiz-cluster"
 }
 
-variable "ecr_repository_name" {}
-variable "aws_region" {}
+variable "ecr_repository_name" {
+  default = "node-app"
+}
+variable "aws_region" {
+  default = "ap-northeast-1"
+}
