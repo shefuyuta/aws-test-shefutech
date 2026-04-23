@@ -5,6 +5,13 @@ on:
     branches:
       - main
 
+######################################
+# 🔒 並列実行防止（ここ重要）
+######################################
+concurrency:
+  group: terraform-main
+  cancel-in-progress: true
+
 permissions:
   id-token: write
   contents: read
@@ -42,9 +49,18 @@ jobs:
         working-directory: ./IaC
 
       - name: Terraform Plan
-        run: terraform plan
+        run: terraform plan -lock-timeout=300s
         working-directory: ./IaC
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve
+        run: terraform apply -auto-approve -lock-timeout=300s
+        working-directory: ./IaC
+
+      - name: Terraform Plan (retry)
+        run: |
+          for i in {1..3}; do
+            terraform plan -lock-timeout=300s && break
+            echo "retry..."
+            sleep 10
+          done
         working-directory: ./IaC
