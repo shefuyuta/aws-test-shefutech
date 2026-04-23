@@ -197,7 +197,7 @@ resource "helm_release" "alb_controller" {
   chart      = "aws-load-balancer-controller"
   namespace  = "kube-system"
 
-  set [
+  set = [
     {
       name  = "clusterName"
       value = aws_eks_cluster.cluster.name
