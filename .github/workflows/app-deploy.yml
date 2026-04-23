@@ -8,10 +8,11 @@ on:
 
 env:
   AWS_REGION: ap-northeast-1
-  role-to-asume: arn:aws:iam::751948409182:role/github-actions-role
+  ROLE_ARN: arn:aws:iam::751948409182:role/github-actions-role
 
 jobs:
   deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -21,7 +22,7 @@ jobs:
     - name: Configure AWS Credentials (OIDC)
       uses: aws-actions/configure-aws-credentials@v2
       with:
-        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        role-to-assume: ${{ env.ROLE_ARN }}
         aws-region: ${{ env.AWS_REGION }}
 
     ######################################
