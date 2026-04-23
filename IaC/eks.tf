@@ -168,6 +168,20 @@ provider "kubernetes" {
 }
 
 ######################################
+# ALB Controller ServiceAccount (IRSA)
+######################################
+resource "kubernetes_service_account" "alb_controller" {
+  metadata {
+    name      = "aws-load-balancer-controller"
+    namespace = "kube-system"
+
+    annotations = {
+      "eks.amazonaws.com/role-arn" = aws_iam_role.alb_controller.arn
+    }
+  }
+}
+
+######################################
 # Helm Provider
 ######################################
 provider "helm" {
@@ -187,7 +201,7 @@ resource "helm_release" "alb_controller" {
   chart      = "aws-load-balancer-controller"
   namespace  = "kube-system"
 
-  timeout = 600
+  timeout = 900
   wait    = true
 
   set = [
@@ -197,19 +211,16 @@ resource "helm_release" "alb_controller" {
     },
     {
       name  = "serviceAccount.create"
-      value = "true"
+      value = "false"
     },
     {
       name  = "serviceAccount.name"
       value = "aws-load-balancer-controller"
-    },
-    {
-      name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-      value = aws_iam_role.alb_controller.arn
     }
   ]
   depends_on = [
     aws_eks_node_group.nodes
+    kubernetes_service_account.alb_controller
   ]
 }
 
