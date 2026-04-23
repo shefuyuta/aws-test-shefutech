@@ -113,16 +113,31 @@ data "aws_eks_cluster_auth" "cluster" {
 # 既存OIDC Provider参照
 ######################################
 data "aws_iam_openid_connect_provider" "oidc" {
-  # 既存OIDCのARNを変数で渡す想定
-  arn = var.oidc_provider_arn
+  url = data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer
 }
 
 ######################################
 # ALB Controller IAM Policy
 ######################################
 resource "aws_iam_policy" "alb_controller" {
-  name   = "AWSLoadBalancerControllerIAMPolicy"
-  policy = file("${path.module}/alb_iam_policy.json")
+  name = "AWSLoadBalancerControllerIAMPolicy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:*",
+          "ec2:Describe*",
+          "ec2:CreateSecurityGroup",
+          "ec2:AuthorizeSecurityGroupIngress",
+          "ec2:CreateTags"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
 ######################################
@@ -166,9 +181,9 @@ provider "kubernetes" {
 # Helm Provider
 ######################################
 provider "helm" {
-  kubernetes {
-    host                   = data.aws_eks_cluster.cluster.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
+  kubernetes = {
+    host                   = aws_eks_cluster.cluster.endpoint
+    cluster_ca_certificate = base64decode(aws_eks_cluster.cluster.certificate_authority[0].data)
     token                  = data.aws_eks_cluster_auth.cluster.token
   }
 }
