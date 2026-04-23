@@ -1,0 +1,33 @@
+name: App Deploy
+
+on:
+  push:
+    paths:
+      - 'app/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: <IAM ROLE>
+          aws-region: ap-northeast-1
+
+      - name: Build Image
+        run: |
+          docker build -t app ./app
+
+      - name: Push to ECR
+        run: |
+          docker tag app:latest <ECR_URI>:latest
+          docker push <ECR_URI>:latest
+
+      - name: Deploy to EKS
+        run: |
+          aws eks update-kubeconfig --name <cluster>
+          kubectl apply -f k8s/
