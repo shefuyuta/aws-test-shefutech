@@ -3,3 +3,6 @@ variable "cluster_name" {
   type        = string
   default     = "wiz-cluster"
 }
+
+variable "ecr_repository_name" {}
+variable "aws_region" {}

@@ -1,0 +1,89 @@
+name: App CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Configure AWS Credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    ######################################
+    # SSMから値取得
+    ######################################
+    - name: Fetch Parameters from SSM
+      run: |
+        CLUSTER_NAME=$(aws ssm get-parameter \
+          --name "/app/eks/cluster_name" \
+          --query "Parameter.Value" \
+          --output text)
+
+        ECR_REPOSITORY=$(aws ssm get-parameter \
+          --name "/app/ecr/repository" \
+          --query "Parameter.Value" \
+          --output text)
+
+        echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
+        echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
+
+    ######################################
+    # ECR Login
+    ######################################
+    - name: Login to ECR
+      run: |
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        aws ecr get-login-password --region $AWS_REGION \
+        | docker login --username AWS --password-stdin \
+        $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+    ######################################
+    # Build
+    ######################################
+    - name: Build Image
+      run: |
+        docker build -t $ECR_REPOSITORY ./app
+
+    ######################################
+    # Tag
+    ######################################
+    - name: Tag Image
+      run: |
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
+        docker tag $ECR_REPOSITORY:latest $IMAGE_URI
+        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+    ######################################
+    # Push
+    ######################################
+    - name: Push Image
+      run: |
+        docker push $IMAGE_URI
+
+    ######################################
+    # EKS接続
+    ######################################
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
+
+    ######################################
+    # Deploy
+    ######################################
+    - name: Deploy
+      run: |
+        kubectl apply -f k8s/
+        kubectl set image deployment/web-app web-app=$IMAGE_URI
