@@ -220,7 +220,7 @@ resource "helm_release" "alb_controller" {
   ]
   depends_on = [
     aws_eks_node_group.nodes,
-    kubernetes_service_account.alb_controller
+    kubernetes_service_account_v1.alb_controller
   ]
 }
 
