@@ -110,34 +110,24 @@ data "aws_eks_cluster_auth" "cluster" {
 }
 
 ######################################
-# 既存OIDC Provider参照
+# OIDC Provider 作成
 ######################################
-data "aws_iam_openid_connect_provider" "oidc" {
+data "tls_certificate" "eks" {
   url = data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "oidc" {
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
+  url             = data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer
 }
 
 ######################################
 # ALB Controller IAM Policy
 ######################################
 resource "aws_iam_policy" "alb_controller" {
-  name = "AWSLoadBalancerControllerIAMPolicy"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "elasticloadbalancing:*",
-          "ec2:Describe*",
-          "ec2:CreateSecurityGroup",
-          "ec2:AuthorizeSecurityGroupIngress",
-          "ec2:CreateTags"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
+  name   = "AWSLoadBalancerControllerIAMPolicy"
+  policy = file("${path.module}/alb_iam_policy.json")
 }
 
 ######################################
@@ -151,12 +141,12 @@ resource "aws_iam_role" "alb_controller" {
     Statement = [{
       Effect = "Allow"
       Principal = {
-        Federated = data.aws_iam_openid_connect_provider.oidc.arn
+        Federated = aws_iam_openid_connect_provider.oidc.arn
       }
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "${replace(data.aws_iam_openid_connect_provider.oidc.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
+          "${replace(aws_iam_openid_connect_provider.oidc.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
         }
       }
     }]
@@ -196,6 +186,9 @@ resource "helm_release" "alb_controller" {
   repository = "https://aws.github.io/eks-charts"
   chart      = "aws-load-balancer-controller"
   namespace  = "kube-system"
+
+  timeout = 600
+  wait    = true
 
   set = [
     {
