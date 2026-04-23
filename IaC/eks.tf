@@ -201,16 +201,16 @@ resource "helm_release" "alb_controller" {
     {
       name  = "clusterName"
       value = aws_eks_cluster.cluster.name
-    }
-    ,{
+    },
+    {
       name  = "serviceAccount.create"
       value = "true"
-    }
-    ,{
+    },
+    {
       name  = "serviceAccount.name"
       value = "aws-load-balancer-controller"
     },
-    ,{
+    {
       name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
       value = aws_iam_role.alb_controller.arn
     }
