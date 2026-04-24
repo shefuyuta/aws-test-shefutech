@@ -204,20 +204,21 @@ resource "helm_release" "alb_controller" {
   timeout = 900
   wait    = true
 
-  set = [
-    {
+  set {
       name  = "clusterName"
       value = aws_eks_cluster.cluster.name
-    },
-    {
+  }
+
+  set {
       name  = "serviceAccount.create"
       value = "false"
-    },
-    {
+    }
+
+  set {
       name  = "serviceAccount.name"
       value = "aws-load-balancer-controller"
-    }
-  ]
+  }
+  
   depends_on = [
     aws_eks_node_group.nodes,
     kubernetes_service_account_v1.alb_controller
