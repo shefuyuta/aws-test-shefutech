@@ -163,6 +163,35 @@ resource "aws_iam_role_policy_attachment" "alb_attach" {
 }
 
 ######################################
+# EKS Access (kubectl用)
+######################################
+
+resource "aws_eks_access_entry" "cloudshell" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  principal_arn = "arn:aws:iam::751948409182:role/cloudshell-admin"
+  type          = "STANDARD"
+
+  depends_on = [
+    aws_eks_cluster.cluster
+  ]
+}
+
+resource "aws_eks_access_policy_association" "cloudshell_admin" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  principal_arn = aws_eks_access_entry.cloudshell.principal_arn
+
+  policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [
+    aws_eks_access_entry.cloudshell
+  ]
+}
+
+######################################
 # Kubernetes Provider
 ######################################
 provider "kubernetes" {
