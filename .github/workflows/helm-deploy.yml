@@ -24,12 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS
+      - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
+          role-to-assume: arn:aws:iam::751948409182:role/github-actions-role
+          aws-region: ap-northeast-1
+      
       ##################################
       # SSMから取得
       ##################################
