@@ -15,9 +15,12 @@ spec:
       serviceAccountName: admin-sa
       containers:
         - name: web-app
-          image: <ECR_URI>:latest
+          image: nginx:latest   # placeholder — CI/CD overrides via kubectl set image
           ports:
             - containerPort: 3000
           env:
-            - name: MONGO_URI
-              value: "mongodb://<MONGO_VM_PRIVATE_IP>:27017/test"
+            - name: MONGO_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-secret
+                  key: mongo-url
