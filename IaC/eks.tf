@@ -103,6 +103,10 @@ resource "aws_eks_node_group" "nodes" {
 ######################################
 data "aws_eks_cluster" "cluster" {
   name = aws_eks_cluster.cluster.name
+
+  depends_on = [
+    aws_eks_cluster.cluster
+  ]
 }
 
 data "aws_eks_cluster_auth" "cluster" {
@@ -146,7 +150,7 @@ resource "aws_iam_role" "alb_controller" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "${replace(aws_iam_openid_connect_provider.oidc.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
+          "${replace(data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
         }
       }
     }]
@@ -186,8 +190,8 @@ resource "kubernetes_service_account_v1" "alb_controller" {
 ######################################
 provider "helm" {
   kubernetes {
-    host                   = aws_eks_cluster.cluster.endpoint
-    cluster_ca_certificate = base64decode(aws_eks_cluster.cluster.certificate_authority[0].data)
+    host                   = data.aws_eks_cluster.cluster.endpoint
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
     token                  = data.aws_eks_cluster_auth.cluster.token
   }
 }
@@ -203,12 +207,29 @@ resource "helm_release" "alb_controller" {
 
   timeout = 900
   wait    = true
+  atomic           = true
+  cleanup_on_fail  = true
 
   set {
       name  = "clusterName"
       value = aws_eks_cluster.cluster.name
   }
+  
+  set {
+    name  = "region"
+    value = var.aws_region
+  }
 
+  set {
+    name  = "vpcId"
+    value = aws_vpc.main.id
+  }
+
+  set {
+    name  = "image.tag"
+    value = "v2.6.2"
+  }
+  
   set {
       name  = "serviceAccount.create"
       value = "false"
@@ -219,10 +240,11 @@ resource "helm_release" "alb_controller" {
       value = "aws-load-balancer-controller"
   }
   
-  depends_on = [
-    aws_eks_node_group.nodes,
-    kubernetes_service_account_v1.alb_controller
-  ]
+    depends_on = [
+      aws_eks_node_group.nodes,
+      kubernetes_service_account_v1.alb_controller,
+      aws_iam_role_policy_attachment.alb_attach
+    ]
 }
 
 ######################################
