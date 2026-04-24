@@ -78,6 +78,9 @@ jobs:
             -n kube-system \
             --set clusterName=$CLUSTER_NAME \
             --set region=$AWS_REGION \
+            --set vpcId=<VPC-ID> \
+            --set extraArgs.aws-vpc-id=<VPC-ID> \
+            --set extraArgs.aws-region=$AWS_REGION \
             --set serviceAccount.create=false \
             --set serviceAccount.name=aws-load-balancer-controller \
             --wait --timeout 10m
