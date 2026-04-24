@@ -183,74 +183,15 @@ resource "kubernetes_service_account_v1" "alb_controller" {
       "eks.amazonaws.com/role-arn" = aws_iam_role.alb_controller.arn
     }
   }
-}
 
-######################################
-# Helm Provider
-######################################
-provider "helm" {
-  kubernetes {
-    host                   = data.aws_eks_cluster.cluster.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
-    token                  = data.aws_eks_cluster_auth.cluster.token
-  }
-}
-
-######################################
-# ALB Controller (Helm)
-######################################
-resource "helm_release" "alb_controller" {
-  name       = "aws-load-balancer-controller"
-  repository = "https://aws.github.io/eks-charts"
-  chart      = "aws-load-balancer-controller"
-  namespace  = "kube-system"
-
-  timeout = 900
-  wait    = true
-  atomic           = true
-  cleanup_on_fail  = true
-
-  set {
-      name  = "clusterName"
-      value = aws_eks_cluster.cluster.name
-  }
-  
-  set {
-    name  = "region"
-    value = var.aws_region
-  }
-
-  set {
-    name  = "vpcId"
-    value = aws_vpc.main.id
-  }
-
-  set {
-    name  = "image.tag"
-    value = "v2.6.2"
-  }
-  
-  set {
-      name  = "serviceAccount.create"
-      value = "false"
-    }
-
-  set {
-      name  = "serviceAccount.name"
-      value = "aws-load-balancer-controller"
-  }
-  
-    depends_on = [
-      aws_eks_node_group.nodes,
-      kubernetes_service_account_v1.alb_controller,
-      aws_iam_role_policy_attachment.alb_attach
-    ]
+  depends_on = [
+    aws_eks_node_group.nodes
+  ]
 }
 
 ######################################
 # SSM Parameter Store
 ######################################
-
 resource "aws_ssm_parameter" "eks_cluster_name" {
   name  = "/app/eks/cluster_name"
   type  = "String"

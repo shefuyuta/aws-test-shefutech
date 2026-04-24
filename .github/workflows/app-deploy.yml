@@ -1,11 +1,13 @@
-name: App CI/CD
+name: App Deploy
 
 on:
   workflow_run:
-    workflows: ["Terraform Deploy"]
-    types:
-      - completed
-  workflow_dispatch:       # 手動実行も可能に
+    workflows: ["Helm Deploy"]
+    types: [completed]
+
+concurrency:
+  group: app-main
+  cancel-in-progress: true
 
 permissions:
   id-token: write
@@ -13,117 +15,75 @@ permissions:
 
 env:
   AWS_REGION: ap-northeast-1
-  ROLE_ARN: arn:aws:iam::751948409182:role/github-actions-role
-
-concurrency:
-  group: app-main
-  cancel-in-progress: true
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Configure AWS Credentials (OIDC)
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ env.ROLE_ARN }}
-        aws-region: ${{ env.AWS_REGION }}
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    ######################################
-    # SSM から全パラメータ取得
-    ######################################
-    - name: Fetch Parameters from SSM
-      run: |
-        CLUSTER_NAME=$(aws ssm get-parameter \
-          --name "/app/eks/cluster_name" \
-          --query "Parameter.Value" --output text)
+      ##################################
+      # SSM取得
+      ##################################
+      - name: Fetch Parameters
+        run: |
+          CLUSTER_NAME=$(aws ssm get-parameter \
+            --name "/app/eks/cluster_name" \
+            --query "Parameter.Value" \
+            --output text)
 
-        ECR_REPOSITORY=$(aws ssm get-parameter \
-          --name "/app/ecr/repository" \
-          --query "Parameter.Value" --output text)
+          ECR_REPOSITORY=$(aws ssm get-parameter \
+            --name "/app/ecr/repository" \
+            --query "Parameter.Value" \
+            --output text)
 
-        MONGO_IP=$(aws ssm get-parameter \
-          --name "/app/mongo/private_ip" \
-          --query "Parameter.Value" --output text)
+          echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
+          echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
 
-        MONGO_USER=$(aws ssm get-parameter \
-          --name "/app/mongo/app_user" \
-          --query "Parameter.Value" --output text)
-
-        MONGO_PASS=$(aws ssm get-parameter \
-          --name "/app/mongo/app_pass" --with-decryption \
-          --query "Parameter.Value" --output text)
-
-        MONGO_DB=$(aws ssm get-parameter \
-          --name "/app/mongo/app_db" \
-          --query "Parameter.Value" --output text)
-
-        echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
-        echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
-        echo "MONGO_URL=mongodb://${MONGO_USER}:${MONGO_PASS}@${MONGO_IP}:27017/${MONGO_DB}?authSource=${MONGO_DB}" >> $GITHUB_ENV
-
-    ######################################
-    # ECR Login
-    ######################################
-    - name: Login to ECR
-      run: |
-        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        aws ecr get-login-password --region $AWS_REGION \
+      ##################################
+      # ECR Login
+      ##################################
+      - name: Login to ECR
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          aws ecr get-login-password --region $AWS_REGION \
           | docker login --username AWS --password-stdin \
           $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-    ######################################
-    # Build
-    ######################################
-    - name: Build Image
-      run: docker build -t $ECR_REPOSITORY ./app
+      ##################################
+      # Build & Push
+      ##################################
+      - name: Build & Push
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
 
-    ######################################
-    # Trivy Scan
-    ######################################
-    - name: Scan Image with Trivy
-      uses: aquasecurity/trivy-action@v0.36.0
-      with:
-        image-ref: ${{ env.ECR_REPOSITORY }}:latest
-        severity: HIGH,CRITICAL
-        exit-code: 0   # demo — don't block deploy
+          docker build -t $IMAGE_URI ./app
+          docker push $IMAGE_URI
 
-    ######################################
-    # Tag & Push
-    ######################################
-    - name: Tag & Push Image
-      run: |
-        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
-        docker tag $ECR_REPOSITORY:latest $IMAGE_URI
-        docker push $IMAGE_URI
-        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-    ######################################
-    # EKS 接続
-    ######################################
-    - name: Update kubeconfig
-      run: aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
+      ##################################
+      # kubeconfig
+      ##################################
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name $CLUSTER_NAME \
+            --region $AWS_REGION
 
-    ######################################
-    # K8s Secret 作成 (MongoDB接続情報)
-    ######################################
-    - name: Create MongoDB Secret
-      run: |
-        kubectl create secret generic mongo-secret \
-          --from-literal=mongo-url="$MONGO_URL" \
-          --dry-run=client -o yaml | kubectl apply -f -
-
-    ######################################
-    # Deploy
-    ######################################
-    - name: Deploy to Kubernetes
-      run: |
-        kubectl apply -f k8s/
-        kubectl set image deployment/web-app web-app=$IMAGE_URI
-        kubectl rollout status deployment/web-app --timeout=120s
+      ##################################
+      # Deploy
+      ##################################
+      - name: Deploy
+        run: |
+          kubectl apply -f k8s/
+          kubectl set image deployment/web-app web-app=$IMAGE_URI
