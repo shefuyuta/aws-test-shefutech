@@ -187,7 +187,8 @@ resource "aws_eks_access_policy_association" "cloudshell_admin" {
   }
 
   depends_on = [
-    aws_eks_access_entry.cloudshell
+    aws_eks_access_entry.cloudshell,
+    aws_eks_cluster.cluster
   ]
 }
 
