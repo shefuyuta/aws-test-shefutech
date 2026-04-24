@@ -1,0 +1,83 @@
+name: Helm Deploy
+
+on:
+  workflow_run:
+    workflows: ["Terraform Deploy"]
+    types: [completed]
+
+concurrency:
+  group: helm-main
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  helm:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      ##################################
+      # SSMから取得
+      ##################################
+      - name: Fetch Parameters
+        run: |
+          CLUSTER_NAME=$(aws ssm get-parameter \
+            --name "/app/eks/cluster_name" \
+            --query "Parameter.Value" \
+            --output text)
+
+          echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
+
+      ##################################
+      # kubeconfig
+      ##################################
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name $CLUSTER_NAME \
+            --region $AWS_REGION
+
+      ##################################
+      # EKS Ready待ち（重要）
+      ##################################
+      - name: Wait for Nodes Ready
+        run: |
+          for i in {1..30}; do
+            READY=$(kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready")
+            if [ "$READY" -ge 1 ]; then
+              echo "Nodes are Ready"
+              break
+            fi
+            echo "Waiting for nodes..."
+            sleep 10
+          done
+
+      ##################################
+      # Helm Install
+      ##################################
+      - name: Install ALB Controller
+        run: |
+          helm repo add eks https://aws.github.io/eks-charts
+          helm repo update
+
+          helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+            -n kube-system \
+            --set clusterName=$CLUSTER_NAME \
+            --set region=$AWS_REGION \
+            --set serviceAccount.create=false \
+            --set serviceAccount.name=aws-load-balancer-controller \
+            --wait --timeout 10m
