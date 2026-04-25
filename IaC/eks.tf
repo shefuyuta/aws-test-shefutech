@@ -60,7 +60,7 @@ resource "aws_iam_role_policy_attachment" "registry_policy" {
 resource "aws_eks_cluster" "cluster" {
   name     = var.cluster_name
   role_arn = aws_iam_role.eks_cluster_role.arn
-  version  = "1.29"
+  version  = "1.31"
 
   vpc_config {
     subnet_ids = [
@@ -111,27 +111,11 @@ resource "aws_eks_node_group" "nodes" {
 }
 
 ######################################
-# Access Entry — github-actions-role に kubectl 権限付与
-# これにより CI/CD が kubectl apply を実行できる
+# Access Entry — github-actions-role
+# bootstrap_cluster_creator_admin_permissions = true により
+# クラスタ作成者 (github-actions-role) には自動で Admin 権限が付与される
+# 追加の Access Entry は不要
 ######################################
-resource "aws_eks_access_entry" "github_actions" {
-  cluster_name      = aws_eks_cluster.cluster.name
-  principal_arn     = "arn:aws:iam::751948409182:role/github-actions-role"
-  kubernetes_groups = []
-  type              = "STANDARD"
-}
-
-resource "aws_eks_access_policy_association" "github_actions_admin" {
-  cluster_name  = aws_eks_cluster.cluster.name
-  principal_arn = "arn:aws:iam::751948409182:role/github-actions-role"
-  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-
-  access_scope {
-    type = "cluster"
-  }
-
-  depends_on = [aws_eks_access_entry.github_actions]
-}
 
 ######################################
 # OIDC Provider (IRSA 用)
