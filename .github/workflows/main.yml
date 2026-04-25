@@ -3,6 +3,7 @@ name: Terraform Deploy
 on:
   push:
     branches: [ "main" ]
+  workflow_dispatch:
 
 concurrency:
   group: terraform-main
@@ -18,33 +19,45 @@ env:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./IaC
 
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::751948409182:role/github-actions-role
-          aws-region: ap-northeast-1
-          
-      - name: Configure AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+      - name: Format Check
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
       - name: Init
         run: terraform init
-        working-directory: ./IaC
+
+      - name: Validate
+        run: terraform validate
+
+      ##################################
+      # IaC Security Scan (意図的脆弱設定があるため soft_fail)
+      ##################################
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: IaC
+          quiet: true
+          soft_fail: true
 
       - name: Plan
         run: terraform plan -lock-timeout=300s
-        working-directory: ./IaC
 
       - name: Apply
-        run: terraform apply -auto-approve
-        working-directory: ./IaC
+        if: github.ref == 'refs/heads/main'
+        run: terraform apply -auto-approve -lock-timeout=300s

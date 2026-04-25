@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: ["Helm Deploy"]
     types: [completed]
+  workflow_dispatch:
 
 concurrency:
   group: app-main
@@ -18,7 +19,7 @@ env:
 
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -28,25 +29,27 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::751948409182:role/github-actions-role
-          aws-region: ap-northeast-1
-          
+          aws-region: ${{ env.AWS_REGION }}
+
       ##################################
-      # SSM取得
+      # SSM から全パラメータ取得
       ##################################
       - name: Fetch Parameters
         run: |
-          CLUSTER_NAME=$(aws ssm get-parameter \
-            --name "/app/eks/cluster_name" \
-            --query "Parameter.Value" \
-            --output text)
-
-          ECR_REPOSITORY=$(aws ssm get-parameter \
-            --name "/app/ecr/repository" \
-            --query "Parameter.Value" \
-            --output text)
+          CLUSTER_NAME=$(aws ssm get-parameter --name "/app/eks/cluster_name" --query "Parameter.Value" --output text)
+          ECR_REPOSITORY=$(aws ssm get-parameter --name "/app/ecr/repository" --query "Parameter.Value" --output text)
+          MONGO_IP=$(aws ssm get-parameter --name "/app/mongo/private_ip" --query "Parameter.Value" --output text)
+          MONGO_USER=$(aws ssm get-parameter --name "/app/mongo/app_user" --query "Parameter.Value" --output text)
+          MONGO_PASS=$(aws ssm get-parameter --name "/app/mongo/app_pass" --with-decryption --query "Parameter.Value" --output text)
+          MONGO_DB=$(aws ssm get-parameter --name "/app/mongo/app_db" --query "Parameter.Value" --output text)
 
           echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
           echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
+          # MONGO_URL は Secret 化するためログに出さない
+          echo "::add-mask::$MONGO_PASS"
+          MONGO_URL="mongodb://${MONGO_USER}:${MONGO_PASS}@${MONGO_IP}:27017/${MONGO_DB}?authSource=${MONGO_DB}"
+          echo "::add-mask::$MONGO_URL"
+          echo "MONGO_URL=$MONGO_URL" >> $GITHUB_ENV
 
       ##################################
       # ECR Login
@@ -54,36 +57,57 @@ jobs:
       - name: Login to ECR
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
           aws ecr get-login-password --region $AWS_REGION \
-          | docker login --username AWS --password-stdin \
-          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+            | docker login --username AWS --password-stdin \
+            $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
       ##################################
-      # Build & Push
+      # Build
       ##################################
-      - name: Build & Push
+      - name: Build Image
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
-
           docker build -t $IMAGE_URI ./app
-          docker push $IMAGE_URI
-
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      ##################################
+      # Trivy Scan
+      ##################################
+      - name: Scan Image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_URI }}
+          severity: HIGH,CRITICAL
+          exit-code: 0   # demo: don't block deploy
+
+      ##################################
+      # Push
+      ##################################
+      - name: Push Image
+        run: docker push $IMAGE_URI
 
       ##################################
       # kubeconfig
       ##################################
       - name: Update kubeconfig
-        run: |
-          aws eks update-kubeconfig \
-            --name $CLUSTER_NAME \
-            --region $AWS_REGION
+        run: aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
 
       ##################################
-      # Deploy
+      # MongoDB Secret 作成
+      ##################################
+      - name: Create MongoDB Secret
+        run: |
+          kubectl create secret generic mongo-secret \
+            --from-literal=mongo-url="$MONGO_URL" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      ##################################
+      # Apply k8s manifests + image を上書き
       ##################################
       - name: Deploy
         run: |
           kubectl apply -f k8s/
           kubectl set image deployment/web-app web-app=$IMAGE_URI
+          kubectl rollout status deployment/web-app --timeout=180s
+          kubectl get ingress web-app-ingress

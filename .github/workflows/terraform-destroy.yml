@@ -25,26 +25,37 @@ jobs:
           role-to-assume: arn:aws:iam::751948409182:role/github-actions-role
           aws-region: ap-northeast-1
 
+      ##################################
+      # Helm でインストールした ALB Controller を先に削除
+      # (これをしないと ALB Controller が削除されないまま EKS が消えて孤児リソース化)
+      ##################################
+      - name: Cleanup Helm Releases (Pre-destroy)
+        continue-on-error: true
+        run: |
+          CLUSTER_NAME=$(aws ssm get-parameter --name "/app/eks/cluster_name" --query "Parameter.Value" --output text 2>/dev/null || echo "")
+          if [ -n "$CLUSTER_NAME" ]; then
+            aws eks update-kubeconfig --name $CLUSTER_NAME --region ap-northeast-1 || true
+            helm uninstall aws-load-balancer-controller -n kube-system || true
+            kubectl delete ingress --all -A || true
+            sleep 30   # ALBがAWS側で削除されるのを待つ
+          fi
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # ★ backendを確実に読み込む
       - name: Terraform Init (Reconfigure)
         run: terraform init -reconfigure
 
-      # ★ destroy対象確認（ログ強化）
       - name: Terraform Plan Destroy
         run: |
           echo "==== DESTROY PLAN ===="
           terraform plan -destroy -no-color
 
-      # ★ destroy
       - name: Terraform Destroy
         run: |
           echo "==== START DESTROY ===="
-          terraform destroy -auto-approve -no-color
+          terraform destroy -auto-approve -no-color -lock-timeout=300s
 
-      # ★ state確認（厳密化）
       - name: Check Terraform State
         run: |
           echo "==== STATE CHECK ===="
@@ -55,7 +66,6 @@ jobs:
             echo "✅ State is empty"
           fi
 
-      # ★ AWS確認（絞り込み）
       - name: Verify AWS Resources (Filtered)
         run: |
           echo "==== AWS CHECK ===="

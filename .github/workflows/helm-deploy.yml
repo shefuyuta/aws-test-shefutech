@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: ["Terraform Deploy"]
     types: [completed]
+  workflow_dispatch:
 
 concurrency:
   group: helm-main
@@ -18,7 +19,7 @@ env:
 
 jobs:
   helm:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -28,46 +29,60 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::751948409182:role/github-actions-role
-          aws-region: ap-northeast-1
-      
+          aws-region: ${{ env.AWS_REGION }}
+
       ##################################
-      # SSMから取得
+      # SSM から全パラメータ取得
       ##################################
       - name: Fetch Parameters
         run: |
-          CLUSTER_NAME=$(aws ssm get-parameter \
-            --name "/app/eks/cluster_name" \
-            --query "Parameter.Value" \
-            --output text)
+          CLUSTER_NAME=$(aws ssm get-parameter --name "/app/eks/cluster_name" --query "Parameter.Value" --output text)
+          VPC_ID=$(aws ssm get-parameter --name "/app/eks/vpc_id" --query "Parameter.Value" --output text)
+          ALB_ROLE_ARN=$(aws ssm get-parameter --name "/app/eks/alb_role_arn" --query "Parameter.Value" --output text)
 
           echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
+          echo "VPC_ID=$VPC_ID" >> $GITHUB_ENV
+          echo "ALB_ROLE_ARN=$ALB_ROLE_ARN" >> $GITHUB_ENV
 
       ##################################
       # kubeconfig
       ##################################
       - name: Update kubeconfig
-        run: |
-          aws eks update-kubeconfig \
-            --name $CLUSTER_NAME \
-            --region $AWS_REGION
+        run: aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
 
       ##################################
-      # EKS Ready待ち（重要）
+      # EKS Ready 待ち
       ##################################
       - name: Wait for Nodes Ready
         run: |
           for i in {1..30}; do
-            READY=$(kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready")
+            READY=$(kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready" || true)
             if [ "$READY" -ge 1 ]; then
               echo "Nodes are Ready"
+              kubectl get nodes
               break
             fi
-            echo "Waiting for nodes..."
+            echo "Waiting for nodes... ($i/30)"
             sleep 10
           done
 
       ##################################
-      # Helm Install
+      # ServiceAccount (IRSA) を kubectl で作成
+      # ※ Terraform から kubernetes provider を排除したため、ここで作成
+      ##################################
+      - name: Create ALB Controller ServiceAccount
+        run: |
+          kubectl create serviceaccount aws-load-balancer-controller \
+            -n kube-system \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl annotate serviceaccount aws-load-balancer-controller \
+            -n kube-system \
+            eks.amazonaws.com/role-arn=$ALB_ROLE_ARN \
+            --overwrite
+
+      ##################################
+      # Helm Install ALB Controller
       ##################################
       - name: Install ALB Controller
         run: |
@@ -78,9 +93,12 @@ jobs:
             -n kube-system \
             --set clusterName=$CLUSTER_NAME \
             --set region=$AWS_REGION \
-            --set vpcId=<VPC-ID> \
-            --set extraArgs.aws-vpc-id=<VPC-ID> \
-            --set extraArgs.aws-region=$AWS_REGION \
+            --set vpcId=$VPC_ID \
             --set serviceAccount.create=false \
             --set serviceAccount.name=aws-load-balancer-controller \
             --wait --timeout 10m
+
+      - name: Verify ALB Controller
+        run: |
+          kubectl get deployment -n kube-system aws-load-balancer-controller
+          kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=180s

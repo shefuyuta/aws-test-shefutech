@@ -55,17 +55,26 @@ resource "aws_iam_role_policy_attachment" "registry_policy" {
 }
 
 ######################################
-# EKS Cluster
+# EKS Cluster (with Access Entry API enabled)
 ######################################
 resource "aws_eks_cluster" "cluster" {
   name     = var.cluster_name
   role_arn = aws_iam_role.eks_cluster_role.arn
+  version  = "1.29"
 
   vpc_config {
     subnet_ids = [
       aws_subnet.private_a.id,
       aws_subnet.private_c.id
     ]
+    endpoint_public_access  = true
+    endpoint_private_access = true
+  }
+
+  # Access Entry API を有効化(aws-auth ConfigMap よりモダンな方式)
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
   }
 
   depends_on = [
@@ -77,8 +86,9 @@ resource "aws_eks_cluster" "cluster" {
 # Node Group
 ######################################
 resource "aws_eks_node_group" "nodes" {
-  cluster_name  = aws_eks_cluster.cluster.name
-  node_role_arn = aws_iam_role.eks_node_role.arn
+  cluster_name    = aws_eks_cluster.cluster.name
+  node_group_name = "wiz-nodes"
+  node_role_arn   = aws_iam_role.eks_node_role.arn
 
   subnet_ids = [
     aws_subnet.private_a.id,
@@ -86,10 +96,12 @@ resource "aws_eks_node_group" "nodes" {
   ]
 
   scaling_config {
-    desired_size = 1
-    max_size     = 2
+    desired_size = 2
+    max_size     = 3
     min_size     = 1
   }
+
+  instance_types = ["t3.medium"]
 
   depends_on = [
     aws_iam_role_policy_attachment.worker_node_policy,
@@ -99,31 +111,39 @@ resource "aws_eks_node_group" "nodes" {
 }
 
 ######################################
-# Data sources (EKS接続用)
+# Access Entry — github-actions-role に kubectl 権限付与
+# これにより CI/CD が kubectl apply を実行できる
 ######################################
-data "aws_eks_cluster" "cluster" {
-  name = aws_eks_cluster.cluster.name
-
-  depends_on = [
-    aws_eks_cluster.cluster
-  ]
+resource "aws_eks_access_entry" "github_actions" {
+  cluster_name      = aws_eks_cluster.cluster.name
+  principal_arn     = "arn:aws:iam::751948409182:role/github-actions-role"
+  kubernetes_groups = []
+  type              = "STANDARD"
 }
 
-data "aws_eks_cluster_auth" "cluster" {
-  name = aws_eks_cluster.cluster.name
+resource "aws_eks_access_policy_association" "github_actions_admin" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  principal_arn = "arn:aws:iam::751948409182:role/github-actions-role"
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.github_actions]
 }
 
 ######################################
-# OIDC Provider 作成
+# OIDC Provider (IRSA 用)
 ######################################
 data "tls_certificate" "eks" {
-  url = data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer
+  url = aws_eks_cluster.cluster.identity[0].oidc[0].issuer
 }
 
 resource "aws_iam_openid_connect_provider" "oidc" {
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
-  url             = data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer
+  url             = aws_eks_cluster.cluster.identity[0].oidc[0].issuer
 }
 
 ######################################
@@ -150,7 +170,8 @@ resource "aws_iam_role" "alb_controller" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "${replace(data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
+          "${replace(aws_iam_openid_connect_provider.oidc.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
+          "${replace(aws_iam_openid_connect_provider.oidc.url, "https://", "")}:aud" = "sts.amazonaws.com"
         }
       }
     }]
@@ -160,63 +181,6 @@ resource "aws_iam_role" "alb_controller" {
 resource "aws_iam_role_policy_attachment" "alb_attach" {
   role       = aws_iam_role.alb_controller.name
   policy_arn = aws_iam_policy.alb_controller.arn
-}
-
-######################################
-# EKS Access (kubectl用)
-######################################
-
-resource "aws_eks_access_entry" "cloudshell" {
-  cluster_name  = aws_eks_cluster.cluster.name
-  principal_arn = "arn:aws:iam::751948409182:user/cloudshell-admin"
-  type          = "STANDARD"
-
-  depends_on = [
-    aws_eks_cluster.cluster
-  ]
-}
-
-resource "aws_eks_access_policy_association" "cloudshell_admin" {
-  cluster_name  = aws_eks_cluster.cluster.name
-  principal_arn = aws_eks_access_entry.cloudshell.principal_arn
-
-  policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-
-  access_scope {
-    type = "cluster"
-  }
-
-  depends_on = [
-    aws_eks_access_entry.cloudshell,
-    aws_eks_cluster.cluster
-  ]
-}
-
-######################################
-# Kubernetes Provider
-######################################
-provider "kubernetes" {
-  host                   = data.aws_eks_cluster.cluster.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.cluster.token
-}
-
-######################################
-# ALB Controller ServiceAccount (IRSA)
-######################################
-resource "kubernetes_service_account_v1" "alb_controller" {
-  metadata {
-    name      = "aws-load-balancer-controller"
-    namespace = "kube-system"
-
-    annotations = {
-      "eks.amazonaws.com/role-arn" = aws_iam_role.alb_controller.arn
-    }
-  }
-
-  depends_on = [
-    aws_eks_node_group.nodes
-  ]
 }
 
 ######################################
@@ -238,4 +202,16 @@ resource "aws_ssm_parameter" "region" {
   name  = "/app/aws/region"
   type  = "String"
   value = var.aws_region
+}
+
+resource "aws_ssm_parameter" "vpc_id" {
+  name  = "/app/eks/vpc_id"
+  type  = "String"
+  value = aws_vpc.main.id
+}
+
+resource "aws_ssm_parameter" "alb_role_arn" {
+  name  = "/app/eks/alb_role_arn"
+  type  = "String"
+  value = aws_iam_role.alb_controller.arn
 }
