@@ -118,6 +118,28 @@ resource "aws_eks_node_group" "nodes" {
 ######################################
 
 ######################################
+# Access Entry — cloudshell-admin (デモ用)
+# CloudShell から kubectl を実行するために必要
+######################################
+resource "aws_eks_access_entry" "cloudshell_admin" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  principal_arn = "arn:aws:iam::751948409182:user/cloudshell-admin"
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "cloudshell_admin" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  principal_arn = "arn:aws:iam::751948409182:user/cloudshell-admin"
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.cloudshell_admin]
+}
+
+######################################
 # OIDC Provider (IRSA 用)
 ######################################
 data "tls_certificate" "eks" {

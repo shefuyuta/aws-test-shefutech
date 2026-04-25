@@ -7,6 +7,9 @@ RUN npm install
 
 COPY . .
 
+# PDF要件: container image must contain /wizexercise.txt with your name
+COPY wizexercise.txt /wizexercise.txt
+
 EXPOSE 3000
 
 CMD ["node", "app.js"]

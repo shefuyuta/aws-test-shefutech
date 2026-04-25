@@ -45,7 +45,13 @@ jobs:
 
       - name: Terraform Init (Reconfigure)
         run: terraform init -reconfigure
-
+      
+      - name: Remove Kubernetes resources from state
+        run: |
+          terraform state list | grep -E "^kubernetes_|^helm_" | while read r; do
+            terraform state rm "$r"
+          done
+        
       - name: Terraform Plan Destroy
         run: |
           echo "==== DESTROY PLAN ===="
