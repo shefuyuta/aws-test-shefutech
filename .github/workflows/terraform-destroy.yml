@@ -37,7 +37,7 @@ jobs:
             aws eks update-kubeconfig --name $CLUSTER_NAME --region ap-northeast-1 || true
             helm uninstall aws-load-balancer-controller -n kube-system || true
             kubectl delete ingress --all -A || true
-            sleep 30   # ALBがAWS側で削除されるのを待つ
+            sleep 300   # ALBがAWS側で削除されるのを待つ
           fi
 
       - name: Setup Terraform
