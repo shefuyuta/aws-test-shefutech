@@ -15,7 +15,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "yutam-wiz-tf-state"
+    bucket         = "yutam-tf-state"
     key            = "env/dev/terraform.tfstate"
     region         = "us-west-2"
     dynamodb_table = "terraform-lock-table"
