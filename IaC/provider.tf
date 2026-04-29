@@ -15,13 +15,13 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "yutam-wiz-tf-state-2026"
+    bucket         = "yutam-wiz-tf-state"
     key            = "env/dev/terraform.tfstate"
-    region         = "ap-northeast-1"
+    region         = "us-west-2"
     dynamodb_table = "terraform-lock-table"
   }
 }
 
 provider "aws" {
-  region = "ap-northeast-1"
+  region = "us-west-2"
 }

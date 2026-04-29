@@ -12,7 +12,7 @@ resource "aws_internet_gateway" "igw" {
 resource "aws_subnet" "public_a" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.1.0/24"
-  availability_zone       = "ap-northeast-1a"
+  availability_zone       = "us-west-2a"
   map_public_ip_on_launch = true
 
   tags = {
@@ -25,7 +25,7 @@ resource "aws_subnet" "public_a" {
 resource "aws_subnet" "public_c" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.2.0/24"
-  availability_zone       = "ap-northeast-1c"
+  availability_zone       = "us-west-2c"
   map_public_ip_on_launch = true
 
   tags = {
@@ -39,7 +39,7 @@ resource "aws_subnet" "public_c" {
 resource "aws_subnet" "private_a" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.11.0/24"
-  availability_zone = "ap-northeast-1a"
+  availability_zone = "us-west-2a"
 
   tags = {
     Name = "private-a"
@@ -51,7 +51,7 @@ resource "aws_subnet" "private_a" {
 resource "aws_subnet" "private_c" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.12.0/24"
-  availability_zone = "ap-northeast-1c"
+  availability_zone = "us-west-2c"
 
   tags = {
     Name = "private-c"

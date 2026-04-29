@@ -118,18 +118,18 @@ resource "aws_eks_node_group" "nodes" {
 ######################################
 
 ######################################
-# Access Entry — cloudshell-admin (デモ用)
+# Access Entry — odl_user_2202624 (デモ用)
 # CloudShell から kubectl を実行するために必要
 ######################################
 resource "aws_eks_access_entry" "cloudshell_admin" {
   cluster_name  = aws_eks_cluster.cluster.name
-  principal_arn = "arn:aws:iam::751948409182:user/cloudshell-admin"
+  principal_arn = "arn:aws:iam::438465147858:user/odl_user_2202624"
   type          = "STANDARD"
 }
 
 resource "aws_eks_access_policy_association" "cloudshell_admin" {
   cluster_name  = aws_eks_cluster.cluster.name
-  principal_arn = "arn:aws:iam::751948409182:user/cloudshell-admin"
+  principal_arn = "arn:aws:iam::438465147858:user/odl_user_2202624"
   policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
   access_scope {
