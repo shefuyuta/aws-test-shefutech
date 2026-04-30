@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euxo pipefail
 
-# ログ
 exec > /var/log/mongo-setup.log 2>&1
 
 echo "===== Mongo Setup Start ====="
@@ -10,13 +9,16 @@ echo "===== Mongo Setup Start ====="
 # 0. 前提パッケージ
 ######################################
 apt-get update -y
-apt-get install -y curl gnupg lsb-release
+apt-get install -y curl gnupg lsb-release wget
 
 ######################################
-# 1. MongoDB 4.4 Repo追加
-# [変更] 4.0 → 4.4（4.0リポジトリは削除済みで404になるため）
-# Ubuntu 22.04向け公式リポジトリは存在しないが、
-# focal(20.04)リポジトリはUbuntu 22.04でも動作する
+# 1. libssl1.1インストール（Ubuntu 22.04でMongoDB 4.4に必要）
+######################################
+wget -q http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+
+######################################
+# 2. MongoDB 4.4 リポジトリ追加
 ######################################
 curl -fsSL https://www.mongodb.org/static/pgp/server-4.4.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-4.4.gpg
 
@@ -26,77 +28,74 @@ echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-4.4.gpg ] https://r
 apt-get update -y
 
 ######################################
-# 2. MongoDB インストール
-# [変更] mongoshを追加インストール
-# Ubuntu 22.04では旧来の`mongo` shellが廃止されているため
+# 3. MongoDB インストール
 ######################################
-DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org mongodb-mongosh
+DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org
 
 ######################################
-# 3. 起動（認証なし）
+# 4. bindIp変更（認証有効化前に設定）
+######################################
+sed -i 's/^  bindIp: .*/  bindIp: 0.0.0.0/' /etc/mongod.conf
+
+######################################
+# 5. 起動（認証なし）
 ######################################
 systemctl daemon-reexec
 systemctl enable mongod
 systemctl start mongod
 
 ######################################
-# 4. 起動待ち
-# [変更] mongo → mongosh
+# 6. 起動待ち
 ######################################
 for i in $(seq 1 30); do
-  mongosh --eval "db.runCommand({ ping: 1 })" && break
+  mongo --eval "db.runCommand({ ping: 1 })" && break
   echo "Waiting for mongod... ($i/30)"
   sleep 2
 done
 
 ######################################
-# 5. ユーザー作成
-# [変更] mongo → mongosh（2箇所）
+# 7. ユーザー作成
 ######################################
-mongosh admin <<'EOF'
+mongo admin <<EOF
 db.createUser({
-  user: "adminUser",
-  pwd:  "WizAdmin2026!",
+  user: "${mongo_admin_user}",
+  pwd:  "${mongo_admin_pass}",
   roles: [{ role: "root", db: "admin" }]
 });
 EOF
 
-mongosh wizdb <<'EOF'
+mongo wizdb <<EOF
 db.createUser({
-  user: "appUser",
-  pwd:  "WizApp2026!",
-  roles: [{ role: "readWrite", db: "wizdb" }]
+  user: "${mongo_app_user}",
+  pwd:  "${mongo_app_pass}",
+  roles: [{ role: "readWrite", db: "${mongo_app_db}" }]
 });
 EOF
 
 ######################################
-# 6. 認証有効化 + 外部公開（Wiz用）
+# 8. 認証有効化
 ######################################
-sed -i 's/^  bindIp: .*/  bindIp: 0.0.0.0/' /etc/mongod.conf || true
-
-cat >> /etc/mongod.conf <<'EOF'
+cat >> /etc/mongod.conf <<'MONGOCNF'
 
 security:
   authorization: enabled
-EOF
+MONGOCNF
 
 systemctl restart mongod
 
 ######################################
-# 7. 再起動待ち
-# [変更] mongo → mongosh
+# 9. 再起動待ち
 ######################################
 for i in $(seq 1 30); do
-  mongosh -u adminUser -p "WizAdmin2026!" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 })" && break
+  mongo -u "${mongo_admin_user}" -p "${mongo_admin_pass}" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 })" && break
   echo "Waiting for mongod auth... ($i/30)"
   sleep 2
 done
 
 ######################################
-# 8. データ投入（デモ用）
-# [変更] mongo → mongosh
+# 10. データ投入（デモ用）
 ######################################
-mongosh -u appUser -p "WizApp2026!" --authenticationDatabase wizdb wizdb <<'EOF'
+mongo -u "${mongo_app_user}" -p "${mongo_app_pass}" --authenticationDatabase "${mongo_app_db}" "${mongo_app_db}" <<'EOF'
 db.posts.insertOne({
   text: "Hello from Twizzer! MongoDB is running.",
   createdAt: new Date()
@@ -104,46 +103,43 @@ db.posts.insertOne({
 EOF
 
 ######################################
-# 9. バックアップスクリプト
-# [変更] S3バケット名とリージョンをハードコードから
-#        templatefile変数に変更（ec2.tfのtemplatefileと対応）
+# 11. バックアップスクリプト
 ######################################
-cat > /usr/local/bin/mongo-backup.sh <<'BACKUP_EOF'
+cat > /usr/local/bin/mongo-backup.sh <<BACKUP_EOF
 #!/bin/bash
 set -e
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="/tmp/mongo-backup-$TIMESTAMP"
+TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR="/tmp/mongo-backup-\$TIMESTAMP"
 
 mongodump \
-  -u adminUser \
-  -p "WizAdmin2026!" \
+  -u ${mongo_admin_user} \
+  -p "${mongo_admin_pass}" \
   --authenticationDatabase admin \
-  --out "$BACKUP_DIR"
+  --out "\$BACKUP_DIR"
 
-tar czf "/tmp/mongo-backup-$TIMESTAMP.tar.gz" -C "$BACKUP_DIR" .
-rm -rf "$BACKUP_DIR"
+tar czf "/tmp/mongo-backup-\$TIMESTAMP.tar.gz" -C "\$BACKUP_DIR" .
+rm -rf "\$BACKUP_DIR"
 
-# S3（失敗してもOK）
-aws s3 cp "/tmp/mongo-backup-$TIMESTAMP.tar.gz" \
-  "s3://${s3_bucket}/backups/mongo-backup-$TIMESTAMP.tar.gz" \
+aws s3 cp "/tmp/mongo-backup-\$TIMESTAMP.tar.gz" \
+  "s3://${s3_bucket}/backups/mongo-backup-\$TIMESTAMP.tar.gz" \
   --region ${aws_region} || true
 
-rm -f "/tmp/mongo-backup-$TIMESTAMP.tar.gz"
+rm -f "/tmp/mongo-backup-\$TIMESTAMP.tar.gz"
 
-echo "Backup done: $TIMESTAMP"
+echo "Backup done: \$TIMESTAMP"
 BACKUP_EOF
 
 chmod +x /usr/local/bin/mongo-backup.sh
 
 ######################################
-# 10. cron登録
+# 12. cron登録
 ######################################
 echo "0 2 * * * root /usr/local/bin/mongo-backup.sh >> /var/log/mongo-backup.log 2>&1" > /etc/cron.d/mongo-backup
 chmod 644 /etc/cron.d/mongo-backup
 
 ######################################
-# 11. 初回バックアップ（失敗OK）
+# 13. 初回バックアップ
 ######################################
 /usr/local/bin/mongo-backup.sh || true
 
