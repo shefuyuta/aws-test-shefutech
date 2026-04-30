@@ -1,121 +1,139 @@
 #!/bin/bash
-set -ex
+set -euxo pipefail
+
+# ログ
 exec > /var/log/mongo-setup.log 2>&1
 
-######################################
-# 1. MongoDB 4.0 Repository
-######################################
-cat > /etc/yum.repos.d/mongodb-org-4.0.repo << 'REPO'
-[mongodb-org-4.0]
-name=MongoDB Repository
-baseurl=https://repo.mongodb.org/yum/amazon/2/mongodb-org/4.0/x86_64/
-gpgcheck=1
-enabled=1
-gpgkey=https://www.mongodb.org/static/pgp/server-4.0.asc
-REPO
+echo "===== Mongo Setup Start ====="
 
 ######################################
-# 2. Install MongoDB 4.0
+# 0. 前提パッケージ
 ######################################
-yum install -y mongodb-org
+apt-get update -y
+apt-get install -y curl gnupg lsb-release
 
 ######################################
-# 3. Start MongoDB (no auth first)
+# 1. MongoDB 4.0 Repo追加（Ubuntu 20.04でもfocal指定）
 ######################################
-systemctl start mongod
+curl -fsSL https://www.mongodb.org/static/pgp/server-4.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-4.0.gpg
+
+echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-4.0.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.0 multiverse" \
+  > /etc/apt/sources.list.d/mongodb-org-4.0.list
+
+apt-get update -y
+
+######################################
+# 2. MongoDB インストール
+######################################
+DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org
+
+######################################
+# 3. 起動（認証なし）
+######################################
+systemctl daemon-reexec
 systemctl enable mongod
+systemctl start mongod
 
-# Wait for mongod to be ready
+######################################
+# 4. 起動待ち
+######################################
 for i in $(seq 1 30); do
   mongo --eval "db.runCommand({ ping: 1 })" && break
-  echo "Waiting for mongod to start... ($i/30)"
+  echo "Waiting for mongod... ($i/30)"
   sleep 2
 done
 
 ######################################
-# 4. Create admin user + app user
+# 5. ユーザー作成
 ######################################
-mongo admin << MONGOEOF
+mongo admin <<'EOF'
 db.createUser({
-  user: "${mongo_admin_user}",
-  pwd:  "${mongo_admin_pass}",
+  user: "adminUser",
+  pwd:  "WizAdmin2026!",
   roles: [{ role: "root", db: "admin" }]
 });
-MONGOEOF
+EOF
 
-mongo ${mongo_app_db} << MONGOEOF
+mongo wizdb <<'EOF'
 db.createUser({
-  user: "${mongo_app_user}",
-  pwd:  "${mongo_app_pass}",
-  roles: [{ role: "readWrite", db: "${mongo_app_db}" }]
+  user: "appUser",
+  pwd:  "WizApp2026!",
+  roles: [{ role: "readWrite", db: "wizdb" }]
 });
-MONGOEOF
+EOF
 
 ######################################
-# 5. Enable authentication
+# 6. 認証有効化 + 外部公開（Wiz用）
 ######################################
-cat >> /etc/mongod.conf << 'AUTHCONF'
+sed -i 's/^  bindIp: .*/  bindIp: 0.0.0.0/' /etc/mongod.conf || true
+
+cat >> /etc/mongod.conf <<'EOF'
 
 security:
   authorization: enabled
-AUTHCONF
-
-# Bind to all interfaces (needed for K8s access)
-sed -i 's/bindIp: 127.0.0.1/bindIp: 0.0.0.0/' /etc/mongod.conf
+EOF
 
 systemctl restart mongod
 
-# Wait for restart
+######################################
+# 7. 再起動待ち
+######################################
 for i in $(seq 1 30); do
-  mongo -u "${mongo_admin_user}" -p "${mongo_admin_pass}" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 })" && break
+  mongo -u adminUser -p "WizAdmin2026!" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 })" && break
+  echo "Waiting for mongod auth... ($i/30)"
   sleep 2
 done
 
 ######################################
-# 6. Insert seed data (demo用)
+# 8. データ投入（デモ用）
 ######################################
-mongo -u "${mongo_app_user}" -p "${mongo_app_pass}" --authenticationDatabase "${mongo_app_db}" ${mongo_app_db} << MONGOEOF
+mongo -u appUser -p "WizApp2026!" --authenticationDatabase wizdb wizdb <<'EOF'
 db.posts.insertOne({
   text: "Hello from Twizzer! MongoDB is running.",
   createdAt: new Date()
 });
-MONGOEOF
+EOF
 
 ######################################
-# 7. Daily backup cron → S3
+# 9. バックアップスクリプト
 ######################################
-cat > /usr/local/bin/mongo-backup.sh << 'BACKUP'
+cat > /usr/local/bin/mongo-backup.sh <<'EOF'
 #!/bin/bash
 set -e
+
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="/tmp/mongo-backup-$$TIMESTAMP"
+BACKUP_DIR="/tmp/mongo-backup-$TIMESTAMP"
 
 mongodump \
-  -u "${mongo_admin_user}" \
-  -p "${mongo_admin_pass}" \
+  -u adminUser \
+  -p "WizAdmin2026!" \
   --authenticationDatabase admin \
-  --out "$$BACKUP_DIR"
+  --out "$BACKUP_DIR"
 
-tar czf "/tmp/mongo-backup-$$TIMESTAMP.tar.gz" -C "$$BACKUP_DIR" .
-rm -rf "$$BACKUP_DIR"
+tar czf "/tmp/mongo-backup-$TIMESTAMP.tar.gz" -C "$BACKUP_DIR" .
+rm -rf "$BACKUP_DIR"
 
-aws s3 cp \
-  "/tmp/mongo-backup-$$TIMESTAMP.tar.gz" \
-  "s3://${s3_bucket}/backups/mongo-backup-$$TIMESTAMP.tar.gz" \
-  --region ${aws_region}
+# S3（失敗してもOK）
+aws s3 cp "/tmp/mongo-backup-$TIMESTAMP.tar.gz" \
+  "s3://wiz-backup-eae397b7/backups/mongo-backup-$TIMESTAMP.tar.gz" \
+  --region us-west-2 || true
 
-rm -f "/tmp/mongo-backup-$$TIMESTAMP.tar.gz"
+rm -f "/tmp/mongo-backup-$TIMESTAMP.tar.gz"
 
-echo "[$(date)] Backup completed: mongo-backup-$$TIMESTAMP.tar.gz"
-BACKUP
+echo "Backup done: $TIMESTAMP"
+EOF
 
 chmod +x /usr/local/bin/mongo-backup.sh
 
-# Run first backup immediately
-/usr/local/bin/mongo-backup.sh || echo "Initial backup failed (S3 may not be ready)"
-
-# Schedule daily backup at 2:00 AM
+######################################
+# 10. cron登録
+######################################
 echo "0 2 * * * root /usr/local/bin/mongo-backup.sh >> /var/log/mongo-backup.log 2>&1" > /etc/cron.d/mongo-backup
 chmod 644 /etc/cron.d/mongo-backup
 
-echo "[$(date)] MongoDB setup complete."
+######################################
+# 11. 初回バックアップ（失敗OK）
+######################################
+/usr/local/bin/mongo-backup.sh || true
+
+echo "===== Mongo Setup Complete ====="
