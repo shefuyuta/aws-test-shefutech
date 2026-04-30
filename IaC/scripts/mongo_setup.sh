@@ -13,19 +13,24 @@ apt-get update -y
 apt-get install -y curl gnupg lsb-release
 
 ######################################
-# 1. MongoDB 4.0 Repo追加（Ubuntu 20.04でもfocal指定）
+# 1. MongoDB 4.4 Repo追加
+# [変更] 4.0 → 4.4（4.0リポジトリは削除済みで404になるため）
+# Ubuntu 22.04向け公式リポジトリは存在しないが、
+# focal(20.04)リポジトリはUbuntu 22.04でも動作する
 ######################################
-curl -fsSL https://www.mongodb.org/static/pgp/server-4.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-4.0.gpg
+curl -fsSL https://www.mongodb.org/static/pgp/server-4.4.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-4.4.gpg
 
-echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-4.0.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.0 multiverse" \
-  > /etc/apt/sources.list.d/mongodb-org-4.0.list
+echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-4.4.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" \
+  > /etc/apt/sources.list.d/mongodb-org-4.4.list
 
 apt-get update -y
 
 ######################################
 # 2. MongoDB インストール
+# [変更] mongoshを追加インストール
+# Ubuntu 22.04では旧来の`mongo` shellが廃止されているため
 ######################################
-DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org
+DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org mongodb-mongosh
 
 ######################################
 # 3. 起動（認証なし）
@@ -36,17 +41,19 @@ systemctl start mongod
 
 ######################################
 # 4. 起動待ち
+# [変更] mongo → mongosh
 ######################################
 for i in $(seq 1 30); do
-  mongo --eval "db.runCommand({ ping: 1 })" && break
+  mongosh --eval "db.runCommand({ ping: 1 })" && break
   echo "Waiting for mongod... ($i/30)"
   sleep 2
 done
 
 ######################################
 # 5. ユーザー作成
+# [変更] mongo → mongosh（2箇所）
 ######################################
-mongo admin <<'EOF'
+mongosh admin <<'EOF'
 db.createUser({
   user: "adminUser",
   pwd:  "WizAdmin2026!",
@@ -54,7 +61,7 @@ db.createUser({
 });
 EOF
 
-mongo wizdb <<'EOF'
+mongosh wizdb <<'EOF'
 db.createUser({
   user: "appUser",
   pwd:  "WizApp2026!",
@@ -77,17 +84,19 @@ systemctl restart mongod
 
 ######################################
 # 7. 再起動待ち
+# [変更] mongo → mongosh
 ######################################
 for i in $(seq 1 30); do
-  mongo -u adminUser -p "WizAdmin2026!" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 })" && break
+  mongosh -u adminUser -p "WizAdmin2026!" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 })" && break
   echo "Waiting for mongod auth... ($i/30)"
   sleep 2
 done
 
 ######################################
 # 8. データ投入（デモ用）
+# [変更] mongo → mongosh
 ######################################
-mongo -u appUser -p "WizApp2026!" --authenticationDatabase wizdb wizdb <<'EOF'
+mongosh -u appUser -p "WizApp2026!" --authenticationDatabase wizdb wizdb <<'EOF'
 db.posts.insertOne({
   text: "Hello from Twizzer! MongoDB is running.",
   createdAt: new Date()
@@ -96,8 +105,10 @@ EOF
 
 ######################################
 # 9. バックアップスクリプト
+# [変更] S3バケット名とリージョンをハードコードから
+#        templatefile変数に変更（ec2.tfのtemplatefileと対応）
 ######################################
-cat > /usr/local/bin/mongo-backup.sh <<'EOF'
+cat > /usr/local/bin/mongo-backup.sh <<'BACKUP_EOF'
 #!/bin/bash
 set -e
 
@@ -115,13 +126,13 @@ rm -rf "$BACKUP_DIR"
 
 # S3（失敗してもOK）
 aws s3 cp "/tmp/mongo-backup-$TIMESTAMP.tar.gz" \
-  "s3://wiz-backup-eae397b7/backups/mongo-backup-$TIMESTAMP.tar.gz" \
-  --region us-west-2 || true
+  "s3://${s3_bucket}/backups/mongo-backup-$TIMESTAMP.tar.gz" \
+  --region ${aws_region} || true
 
 rm -f "/tmp/mongo-backup-$TIMESTAMP.tar.gz"
 
 echo "Backup done: $TIMESTAMP"
-EOF
+BACKUP_EOF
 
 chmod +x /usr/local/bin/mongo-backup.sh
 

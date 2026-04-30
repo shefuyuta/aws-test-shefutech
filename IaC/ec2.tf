@@ -56,7 +56,7 @@ resource "aws_security_group" "mongo_sg" {
 # EC2 Instance — MongoDB Server
 ######################################
 resource "aws_instance" "mongo" {
-  ami                         = "ami-01f99b4d609a9f41e" #←ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20250603
+  ami                         = "ami-0735c191cf914754d" # Ubuntu 22.04 LTS (2022年リリース)
   instance_type               = "t3.micro"
   subnet_id                   = aws_subnet.public_a.id
   associate_public_ip_address = true
