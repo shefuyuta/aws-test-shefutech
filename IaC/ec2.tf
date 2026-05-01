@@ -1,146 +1,110 @@
-#!/bin/bash
-set -euxo pipefail
+######################################
+# SSH Key Pair (auto-generated)
+######################################
+resource "tls_private_key" "ssh" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
 
-exec > /var/log/mongo-setup.log 2>&1
-
-echo "===== Mongo Setup Start ====="
+resource "aws_key_pair" "mongo" {
+  key_name   = "mongo-key"
+  public_key = tls_private_key.ssh.public_key_openssh
+}
 
 ######################################
-# 0. 前提パッケージ + AWS CLI
+# Security Group — MongoDB VM
 ######################################
-apt-get update -y
-apt-get install -y curl gnupg lsb-release wget awscli
+resource "aws_security_group" "mongo_sg" {
+  name        = "mongo-sg"
+  description = "Security group for MongoDB VM"
+  vpc_id      = aws_vpc.main.id
+
+  # ⚠ Intentional: SSH open to the world
+  ingress {
+    description = "SSH from anywhere (intentional misconfig)"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # MongoDB — restricted to EKS private subnets only
+  ingress {
+    description = "MongoDB from K8s private subnets only"
+    from_port   = 27017
+    to_port     = 27017
+    protocol    = "tcp"
+    cidr_blocks = [
+      aws_subnet.private_a.cidr_block, # 10.0.11.0/24
+      aws_subnet.private_c.cidr_block  # 10.0.12.0/24
+    ]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "mongo-sg"
+  }
+}
 
 ######################################
-# 1. libssl1.1インストール（Ubuntu 22.04でMongoDB 4.4に必要）
+# EC2 Instance — MongoDB Server
 ######################################
-wget -q http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
-dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+resource "aws_instance" "mongo" {
+  ami                         = "ami-0735c191cf914754d" # Ubuntu 22.04 LTS (2022年リリース)
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.public_a.id
+  associate_public_ip_address = true
+  key_name                    = aws_key_pair.mongo.key_name
+
+  vpc_security_group_ids = [aws_security_group.mongo_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
+
+  user_data = base64encode(templatefile("${path.module}/scripts/mongo_setup.sh", {
+    mongo_admin_user = var.mongo_admin_user
+    mongo_admin_pass = var.mongo_admin_pass
+    mongo_app_user   = var.mongo_app_user
+    mongo_app_pass   = var.mongo_app_pass
+    mongo_app_db     = var.mongo_app_db
+    s3_bucket        = aws_s3_bucket.backup.bucket
+    aws_region       = var.aws_region
+  }))
+
+  tags = {
+    Name = "mongo-instance"
+  }
+
+  depends_on = [aws_s3_bucket.backup]
+}
 
 ######################################
-# 2. MongoDB 4.4 リポジトリ追加
+# SSM Parameters — for K8s deployment
 ######################################
-curl -fsSL https://www.mongodb.org/static/pgp/server-4.4.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-4.4.gpg
+resource "aws_ssm_parameter" "mongo_private_ip" {
+  name  = "/app/mongo/private_ip"
+  type  = "String"
+  value = aws_instance.mongo.private_ip
+}
 
-echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-4.4.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" \
-  > /etc/apt/sources.list.d/mongodb-org-4.4.list
+resource "aws_ssm_parameter" "mongo_app_user" {
+  name  = "/app/mongo/app_user"
+  type  = "String"
+  value = var.mongo_app_user
+}
 
-apt-get update -y
+resource "aws_ssm_parameter" "mongo_app_pass" {
+  name  = "/app/mongo/app_pass"
+  type  = "SecureString"
+  value = var.mongo_app_pass
+}
 
-######################################
-# 3. MongoDB インストール
-######################################
-DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org
-
-######################################
-# 4. bindIp変更（認証有効化前に設定）
-######################################
-sed -i 's/^  bindIp: .*/  bindIp: 0.0.0.0/' /etc/mongod.conf
-
-######################################
-# 5. 起動（認証なし）
-######################################
-systemctl daemon-reexec
-systemctl enable mongod
-systemctl start mongod
-
-######################################
-# 6. 起動待ち
-######################################
-for i in $(seq 1 30); do
-  mongo --eval "db.runCommand({ ping: 1 })" && break
-  echo "Waiting for mongod... ($i/30)"
-  sleep 2
-done
-
-######################################
-# 7. ユーザー作成
-######################################
-mongo admin <<EOF
-db.createUser({
-  user: "${mongo_admin_user}",
-  pwd:  "${mongo_admin_pass}",
-  roles: [{ role: "root", db: "admin" }]
-});
-EOF
-
-mongo "${mongo_app_db}" <<EOF
-db.createUser({
-  user: "${mongo_app_user}",
-  pwd:  "${mongo_app_pass}",
-  roles: [{ role: "readWrite", db: "${mongo_app_db}" }]
-});
-EOF
-
-######################################
-# 8. 認証有効化
-######################################
-cat >> /etc/mongod.conf <<'MONGOCNF'
-
-security:
-  authorization: enabled
-MONGOCNF
-
-systemctl restart mongod
-
-######################################
-# 9. 再起動待ち
-######################################
-for i in $(seq 1 30); do
-  mongo -u "${mongo_admin_user}" -p "${mongo_admin_pass}" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 })" && break
-  echo "Waiting for mongod auth... ($i/30)"
-  sleep 2
-done
-
-######################################
-# 10. データ投入（デモ用）
-######################################
-mongo -u "${mongo_app_user}" -p "${mongo_app_pass}" --authenticationDatabase "${mongo_app_db}" "${mongo_app_db}" <<'EOF'
-db.posts.insertOne({
-  text: "Hello from Twizzer! MongoDB is running.",
-  createdAt: new Date()
-});
-EOF
-
-######################################
-# 11. バックアップスクリプト
-######################################
-cat > /usr/local/bin/mongo-backup.sh <<BACKUP_EOF
-#!/bin/bash
-set -e
-
-TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="/tmp/mongo-backup-\$TIMESTAMP"
-
-mongodump \
-  -u ${mongo_admin_user} \
-  -p "${mongo_admin_pass}" \
-  --authenticationDatabase admin \
-  --out "\$BACKUP_DIR"
-
-tar czf "/tmp/mongo-backup-\$TIMESTAMP.tar.gz" -C "\$BACKUP_DIR" .
-rm -rf "\$BACKUP_DIR"
-
-/usr/bin/aws s3 cp "/tmp/mongo-backup-\$TIMESTAMP.tar.gz" \
-  "s3://${s3_bucket}/backups/mongo-backup-\$TIMESTAMP.tar.gz" \
-  --region ${aws_region} || true
-
-rm -f "/tmp/mongo-backup-\$TIMESTAMP.tar.gz"
-
-echo "Backup done: \$TIMESTAMP"
-BACKUP_EOF
-
-chmod +x /usr/local/bin/mongo-backup.sh
-
-######################################
-# 12. cron登録
-######################################
-echo "0 2 * * * root /usr/local/bin/mongo-backup.sh >> /var/log/mongo-backup.log 2>&1" > /etc/cron.d/mongo-backup
-chmod 644 /etc/cron.d/mongo-backup
-
-######################################
-# 13. 初回バックアップ
-######################################
-/usr/local/bin/mongo-backup.sh || true
-
-echo "===== Mongo Setup Complete ====="
+resource "aws_ssm_parameter" "mongo_app_db" {
+  name  = "/app/mongo/app_db"
+  type  = "String"
+  value = var.mongo_app_db
+}

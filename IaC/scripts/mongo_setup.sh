@@ -6,10 +6,10 @@ exec > /var/log/mongo-setup.log 2>&1
 echo "===== Mongo Setup Start ====="
 
 ######################################
-# 0. 前提パッケージ
+# 0. 前提パッケージ + AWS CLI
 ######################################
 apt-get update -y
-apt-get install -y curl gnupg lsb-release wget
+apt-get install -y curl gnupg lsb-release wget awscli
 
 ######################################
 # 1. libssl1.1インストール（Ubuntu 22.04でMongoDB 4.4に必要）
@@ -64,7 +64,7 @@ db.createUser({
 });
 EOF
 
-mongo wizdb <<EOF
+mongo "${mongo_app_db}" <<EOF
 db.createUser({
   user: "${mongo_app_user}",
   pwd:  "${mongo_app_pass}",
@@ -121,7 +121,7 @@ mongodump \
 tar czf "/tmp/mongo-backup-\$TIMESTAMP.tar.gz" -C "\$BACKUP_DIR" .
 rm -rf "\$BACKUP_DIR"
 
-aws s3 cp "/tmp/mongo-backup-\$TIMESTAMP.tar.gz" \
+/usr/bin/aws s3 cp "/tmp/mongo-backup-\$TIMESTAMP.tar.gz" \
   "s3://${s3_bucket}/backups/mongo-backup-\$TIMESTAMP.tar.gz" \
   --region ${aws_region} || true
 
