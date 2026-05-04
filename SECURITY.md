@@ -1,21 +1,8 @@
-# Security Policy
+# セキュリティポリシー
 
-## Supported Versions
+このリポジトリは Wiz 技術面接課題のための意図的な脆弱性演習環境です。
+記載されている設定上の不備はすべて意図的なものであり、この検証用 AWS 環境内にのみスコープされています。
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+## 脆弱性の報告について
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
-
-## Reporting a Vulnerability
-
-Use this section to tell people how to report a vulnerability.
-
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+本番環境ではないため、外部からの脆弱性報告は受け付けていません。
