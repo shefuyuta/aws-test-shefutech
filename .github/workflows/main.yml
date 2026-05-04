@@ -12,6 +12,7 @@ concurrency:
 permissions:
   id-token: write
   contents: read
+  security-events: write   # Checkov SARIF を GitHub Security タブへアップロードするために必要
 
 env:
   AWS_REGION: us-west-2
@@ -54,6 +55,15 @@ jobs:
           directory: IaC
           quiet: true
           soft_fail: true
+          output_format: sarif
+          output_file_path: checkov-iac-results.sarif
+
+      - name: Upload Checkov results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()   # Checkov が失敗しても必ずアップロード
+        with:
+          sarif_file: checkov-iac-results.sarif
+          category: checkov-iac
 
       - name: Plan
         run: terraform plan -lock-timeout=300s
