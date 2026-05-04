@@ -13,6 +13,7 @@ concurrency:
 permissions:
   id-token: write
   contents: read
+  security-events: write   # Trivy SARIF を GitHub Security タブへアップロードするために必要
 
 env:
   AWS_REGION: us-west-2
@@ -25,12 +26,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      ##################################
+      # Checkov — K8s マニフェスト IaC スキャン
+      ##################################
       - uses: bridgecrewio/checkov-action@v12
         with:
           directory: k8s
           framework: kubernetes
           soft_fail: true
-          
+          quiet: true
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+
+      - name: Upload Checkov results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()   # Checkov が失敗しても必ずアップロード
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov-k8s
+
+      ##################################
+      # AWS 認証 (OIDC)
+      ##################################
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -51,7 +68,6 @@ jobs:
 
           echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
           echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
-          # MONGO_URL は Secret 化するためログに出さない
           echo "::add-mask::$MONGO_PASS"
           MONGO_URL="mongodb://${MONGO_USER}:${MONGO_PASS}@${MONGO_IP}:27017/${MONGO_DB}?authSource=${MONGO_DB}"
           echo "::add-mask::$MONGO_URL"
@@ -78,17 +94,27 @@ jobs:
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       ##################################
-      # Trivy Scan
+      # Trivy — コンテナイメージスキャン (Push 前)
+      # HIGH/CRITICAL のみ検出、デモ目的のため exit-code: 0（ブロックしない）
       ##################################
       - name: Scan Image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_URI }}
           severity: HIGH,CRITICAL
-          exit-code: 0   # demo: don't block deploy
+          exit-code: 0          # demo: 脆弱性があっても deploy を止めない（意図的ミス設定として説明）
+          format: sarif
+          output: trivy-results.sarif
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()   # Trivy が失敗しても必ずアップロード
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
 
       ##################################
-      # Push
+      # Push (スキャン完了後)
       ##################################
       - name: Push Image
         run: docker push $IMAGE_URI
